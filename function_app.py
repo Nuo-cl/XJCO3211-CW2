@@ -3,10 +3,68 @@ import logging
 import pyodbc
 import json
 import os
+import threading
 from datetime import datetime, timezone
 
 # Initialize Azure Functions app with function-level authentication
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+
+# ============================================
+# ML Model Singleton Cache
+# ============================================
+# Global cache to store loaded ResNet models across function invocations
+# This avoids reloading models on every task, significantly improving performance
+_model_cache = {}
+_model_cache_lock = threading.Lock()
+
+def get_cached_model(model_type: str):
+    """
+    Retrieve a cached ResNet model or load it if not already cached.
+    Thread-safe singleton pattern to ensure models are loaded only once.
+    
+    Args:
+        model_type (str): Either 'ResNet18' or 'ResNet50'
+    
+    Returns:
+        torch.nn.Module: The requested ResNet model in evaluation mode
+    
+    Raises:
+        ValueError: If model_type is not supported
+    """
+    # Check if model is already cached (fast path without lock)
+    if model_type in _model_cache:
+        logging.debug(f'Using cached {model_type} model')
+        return _model_cache[model_type]
+    
+    # Acquire lock for thread-safe model loading
+    with _model_cache_lock:
+        # Double-check after acquiring lock (another thread might have loaded it)
+        if model_type in _model_cache:
+            logging.debug(f'Using cached {model_type} model (loaded by another thread)')
+            return _model_cache[model_type]
+        
+        # Load PyTorch and models (only import when needed)
+        import torch
+        import torchvision.models as models
+        
+        logging.info(f'Loading {model_type} model for the first time...')
+        
+        # Load the appropriate model architecture
+        if model_type == 'ResNet18':
+            model = models.resnet18(pretrained=False)
+        elif model_type == 'ResNet50':
+            model = models.resnet50(pretrained=False)
+        else:
+            raise ValueError(f"Unsupported model type: {model_type}")
+        
+        # Set to evaluation mode (disables dropout, batch norm updates)
+        model.eval()
+        
+        # Cache the model for future use
+        _model_cache[model_type] = model
+        logging.info(f'{model_type} model loaded and cached successfully')
+        
+        return model
 
 # ============================================
 # Function 1: CreateTask (HTTP Trigger)
@@ -129,11 +187,14 @@ def process_task(changes: str):
     # Parse incoming change events from SQL trigger
     changes_list = json.loads(changes)
 
-    logging.info(f'ProcessTask function triggered. Processing {len(changes_list)} task(s).')
-
     # Prepare database connection for result storage
     connection_string = os.environ.get('SQL_CONNECTION_STRING')
     full_connection_string = f"Driver={{ODBC Driver 18 for SQL Server}};{connection_string}"
+
+    # Track statistics for logging
+    tasks_to_process = []
+    skipped_count = 0
+    error_count = 0
 
     # Process each task from the trigger batch
     for change in changes_list:
@@ -149,14 +210,23 @@ def process_task(changes: str):
 
         # Skip if critical fields are missing
         if not task_id or not model_to_use:
+            error_count += 1
             logging.error(f'Missing required fields. TaskID: {task_id}, ModelToUse: {model_to_use}')
             continue
 
-        # Avoid reprocessing completed or failed tasks
+        # Avoid reprocessing completed or failed tasks (silent skip)
         if status in ['Completed', 'Failed']:
-            logging.warning(f'TaskID {task_id} is already {status}. Skipping.')
+            skipped_count += 1
             continue
 
+        # Add to processing queue
+        tasks_to_process.append((task_id, model_to_use))
+
+    # Log summary instead of individual entries
+    logging.info(f'SQL Trigger: {len(changes_list)} total, {len(tasks_to_process)} to process, {skipped_count} skipped, {error_count} errors')
+
+    # Process only the pending tasks
+    for task_id, model_to_use in tasks_to_process:
         logging.info(f'Processing TaskID: {task_id}, Model: {model_to_use}')
 
         # Mark F2 function start time for performance measurement
@@ -167,17 +237,9 @@ def process_task(changes: str):
             # Shape: [batch_size=1, channels=3, height=224, width=224]
             simulated_image = torch.randn(1, 3, 224, 224)
 
-            # Load the requested ResNet model architecture
-            # Note: pretrained=False to avoid downloading weights (faster for testing)
-            if model_to_use == 'ResNet18':
-                model = models.resnet18(pretrained=False)
-            elif model_to_use == 'ResNet50':
-                model = models.resnet50(pretrained=False)
-            else:
-                raise ValueError(f"Unknown model type: {model_to_use}")
-
-            # Switch to evaluation mode
-            model.eval()
+            # Get model from cache (or load if first time)
+            # This significantly reduces latency by avoiding repeated model loading
+            model = get_cached_model(model_to_use)
 
             # Run inference
             # Note: torch.no_grad() is used to disable gradient tracking
@@ -190,8 +252,6 @@ def process_task(changes: str):
 
             # Calculate total inference time in milliseconds
             execution_time_ms = int((f2_end_time - f2_start_time).total_seconds() * 1000)
-
-            logging.info(f'TaskID {task_id} inference completed. Time: {execution_time_ms}ms, Predicted Class: {predicted_class}')
 
             # Store inference results and update task status in database
             with pyodbc.connect(full_connection_string) as conn:
@@ -233,7 +293,8 @@ def process_task(changes: str):
 
                 conn.commit()
 
-            logging.info(f'TaskID {task_id} results saved to database.')
+            # Log completion with key metrics in one line
+            logging.info(f'TaskID {task_id} completed: {execution_time_ms}ms, class={predicted_class}')
 
         except Exception as e:
             # Handle any errors during model loading or inference
