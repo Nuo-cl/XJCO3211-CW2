@@ -17,11 +17,22 @@
     "id": "Microsoft.Azure.Functions.ExtensionBundle",
     "version": "[4.*, 5.0.0)"
   },
+  "http": {
+    "routePrefix": "api",
+    "maxConcurrentRequests": 30,
+    "maxOutstandingRequests": 80,
+    "dynamicThrottlesEnabled": true
+  },
+  "functionTimeout": "00:02:00",
+  "concurrency": {
+    "dynamicConcurrencyEnabled": true,
+    "snapshotPersistenceEnabled": true
+  },
   "extensions": {
     "sql": {
-      "pollingIntervalMs": 5000,
-      "maxBatchSize": 100,
-      "maxChangesPerWorker": 100
+      "pollingIntervalMs": 1500,
+      "maxBatchSize": 15,
+      "maxChangesPerWorker": 50
     }
   }
 }

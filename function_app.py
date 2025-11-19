@@ -107,15 +107,15 @@ def _initialize_db_engine():
         _db_engine = create_engine(
             connection_url,
             poolclass=pool.QueuePool,
-            pool_size=5,              # Keep 5 connections open
-            max_overflow=10,          # Allow up to 15 total connections (5 + 10)
+            pool_size=8,              # Keep 8 connections open
+            max_overflow=24,          # Allow up to 32 total connections (8 + 24)
             pool_timeout=30,          # Wait up to 30s for a connection
             pool_recycle=3600,        # Recycle connections after 1 hour
             pool_pre_ping=True,       # Verify connection health before using
             echo=False                # Disable SQL query logging
         )
         
-        logging.info('Database connection pool initialized (size=5, max=15)')
+        logging.info('Database connection pool initialized (size=8, max=32)')
         return _db_engine
 
 @contextmanager

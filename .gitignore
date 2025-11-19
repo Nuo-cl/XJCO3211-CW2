@@ -137,3 +137,6 @@ __azurite_db*__.json
 
 # vscode settings
 .vscode/
+
+# local records
+opt.md
