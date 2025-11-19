@@ -4,7 +4,10 @@ import pyodbc
 import json
 import os
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from sqlalchemy import create_engine, pool, event
+from sqlalchemy.engine import Engine
 
 # Initialize Azure Functions app with function-level authentication
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
@@ -67,6 +70,80 @@ def get_cached_model(model_type: str):
         return model
 
 # ============================================
+# Database Connection Pool
+# ============================================
+# SQLAlchemy connection pool for efficient database access
+# Reuses connections instead of creating new ones for each query
+_db_engine = None
+_db_engine_lock = threading.Lock()
+
+def _get_connection_string():
+    """Build the full ODBC connection string for SQL Server"""
+    base_connection_string = os.environ.get('SQL_CONNECTION_STRING')
+    if not base_connection_string:
+        raise ValueError("SQL_CONNECTION_STRING environment variable not set")
+    return f"DRIVER={{ODBC Driver 18 for SQL Server}};{base_connection_string}"
+
+def _initialize_db_engine():
+    """
+    Initialize SQLAlchemy engine with connection pooling.
+    Thread-safe singleton pattern ensures only one pool is created.
+    """
+    global _db_engine
+    
+    if _db_engine is not None:
+        return _db_engine
+    
+    with _db_engine_lock:
+        # Double-check after acquiring lock
+        if _db_engine is not None:
+            return _db_engine
+        
+        connection_string = _get_connection_string()
+        # URL-encode the connection string for SQLAlchemy
+        connection_url = f"mssql+pyodbc:///?odbc_connect={connection_string}"
+        
+        # Create engine with connection pool configuration
+        _db_engine = create_engine(
+            connection_url,
+            poolclass=pool.QueuePool,
+            pool_size=5,              # Keep 5 connections open
+            max_overflow=10,          # Allow up to 15 total connections (5 + 10)
+            pool_timeout=30,          # Wait up to 30s for a connection
+            pool_recycle=3600,        # Recycle connections after 1 hour
+            pool_pre_ping=True,       # Verify connection health before using
+            echo=False                # Disable SQL query logging
+        )
+        
+        logging.info('Database connection pool initialized (size=5, max=15)')
+        return _db_engine
+
+@contextmanager
+def get_db_connection():
+    """
+    Context manager to get a database connection from the pool.
+    Automatically handles connection checkout and return.
+    
+    Usage:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT ...")
+    """
+    engine = _initialize_db_engine()
+    
+    # Get raw pyodbc connection from SQLAlchemy pool
+    connection = engine.raw_connection()
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        # Return connection to pool (not closing it)
+        connection.close()
+
+# ============================================
 # Function 1: CreateTask (HTTP Trigger)
 # ============================================
 @app.route(route="create_task", methods=["POST"])
@@ -94,20 +171,8 @@ def create_task(req: func.HttpRequest) -> func.HttpResponse:
                 mimetype="application/json"
             )
 
-        # Retrieve database connection string from environment variables
-        connection_string = os.environ.get('SQL_CONNECTION_STRING')
-        if not connection_string:
-            return func.HttpResponse(
-                json.dumps({"error": "Database connection string not configured."}),
-                status_code=500,
-                mimetype="application/json"
-            )
-
-        # Build full connection string with ODBC driver specification
-        full_connection_string = f"Driver={{ODBC Driver 18 for SQL Server}};{connection_string}"
-
-        # Insert new task record into database
-        with pyodbc.connect(full_connection_string) as conn:
+        # Insert new task record into database using connection pool
+        with get_db_connection() as conn:
             cursor = conn.cursor()
 
             # Create task with 'Pending' status and F1 timestamp
@@ -187,10 +252,6 @@ def process_task(changes: str):
     # Parse incoming change events from SQL trigger
     changes_list = json.loads(changes)
 
-    # Prepare database connection for result storage
-    connection_string = os.environ.get('SQL_CONNECTION_STRING')
-    full_connection_string = f"Driver={{ODBC Driver 18 for SQL Server}};{connection_string}"
-
     # Track statistics for logging
     tasks_to_process = []
     skipped_count = 0
@@ -253,8 +314,8 @@ def process_task(changes: str):
             # Calculate total inference time in milliseconds
             execution_time_ms = int((f2_end_time - f2_start_time).total_seconds() * 1000)
 
-            # Store inference results and update task status in database
-            with pyodbc.connect(full_connection_string) as conn:
+            # Store inference results and update task status using connection pool
+            with get_db_connection() as conn:
                 cursor = conn.cursor()
 
                 # Insert performance metrics and classification result
@@ -302,7 +363,7 @@ def process_task(changes: str):
 
             # Mark the task as failed in the database for tracking
             try:
-                with pyodbc.connect(full_connection_string) as conn:
+                with get_db_connection() as conn:
                     cursor = conn.cursor()
                     update_task_query = """
                         UPDATE InferenceTasks
