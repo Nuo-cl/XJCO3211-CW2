@@ -135,3 +135,5 @@ __queuestorage__
 __azurite_db*__.json
 .python_packages
 
+# vscode settings
+.vscode/
