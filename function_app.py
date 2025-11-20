@@ -1,3 +1,29 @@
+"""
+ML Inference Serverless Workflow - Azure Functions Implementation
+
+This project implements a serverless machine learning inference system using
+Azure Functions with ResNet models for image classification. The workflow uses
+HTTP triggers and SQL triggers to create an event-driven processing pipeline.
+
+Design and implementation references:
+- PyTorch integration with Azure Functions:
+  https://github.com/Azure-Samples/functions-python-pytorch-tutorial
+  (Used as reference for PyTorch model loading and inference patterns)
+
+- Azure SQL Trigger implementation:
+  https://github.com/Azure/azure-functions-sql-extension
+  (Used as reference for SQL trigger configuration and Change Tracking setup)
+
+This implementation extends these references with performance optimizations:
+1. Model singleton caching for persistent model instances
+2. SQLAlchemy connection pooling for database efficiency
+3. Concurrent processing configuration for improved throughput
+
+Author: Nuo Chen
+Course: XJCO3211 Distributed Systems Coursework
+Institution: University of Leeds
+"""
+
 import azure.functions as func
 import logging
 import pyodbc

@@ -127,7 +127,6 @@ bin
 obj
 appsettings.json
 local.settings.json
-local.settings.json.example
 
 # Azurite artifacts
 __blobstorage__
@@ -137,6 +136,3 @@ __azurite_db*__.json
 
 # vscode settings
 .vscode/
-
-# local records
-opt.md

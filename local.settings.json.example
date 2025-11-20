@@ -1,0 +1,12 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "DefaultEndpointsProtocol=https;AccountName=<YOUR_STORAGE_ACCOUNT>;AccountKey=<YOUR_STORAGE_KEY>;EndpointSuffix=core.windows.net",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "SQL_CONNECTION_STRING": "Server=tcp:<YOUR_SERVER>.database.windows.net,1433;Database=<YOUR_DATABASE>;Uid=<YOUR_USERNAME>;Pwd=<YOUR_PASSWORD>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;",
+    "PYTHON_ISOLATE_WORKER_DEPENDENCIES": "0",
+    "PYTHON_THREADPOOL_THREAD_COUNT": "6",
+    "PYTHON_ENABLE_WORKER_EXTENSIONS": "1"
+  }
+}
+

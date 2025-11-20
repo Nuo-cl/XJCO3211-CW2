@@ -21,3 +21,6 @@ database_schema.sql
 requirements-local.txt
 local.settings.json.example
 Record.md
+todo.md
+README.md
+opt.md
